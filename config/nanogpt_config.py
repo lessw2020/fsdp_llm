@@ -27,7 +27,9 @@ class train_config(base_config):
     dataset = "openwebtext"  # options = shakespeare_char, openwebtext
     data_dir = "data"
 
-    iters_to_run: int = 8
+    # training
+    iters_to_run: int = 8  # << --- Set to None to run epochs
+    num_epochs: int = 2
 
     batch_size = 48
     block_size = 1024  # 256  # 1024 = gpt2, openwebtext, context of up to 256 previous characters
