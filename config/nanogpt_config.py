@@ -92,6 +92,16 @@ def build_model(cfg, tp_mesh=None, rank=None):
         n_layer: int = 46
         n_head: int = 20
         n_embd: int = 1600
+        
+     elif model_name == "13B":
+        n_layer: int = 44
+        n_head: int = 40
+        n_embd: int = 5120
+    
+    elif model_name == "20B":
+        n_layer: int = 44
+        n_head: int = 64
+        n_embd: int = 6144
 
     else:
         assert False, f"model {model_name} not supported yet."
