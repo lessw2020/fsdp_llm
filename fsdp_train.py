@@ -26,6 +26,13 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 import config.nanogpt_config as fsdp_config
 from models.nanogpt.model import GPT, GPTConfig
 
+from contextlib import contextmanager
+
+import contextlib
+
+_none_context = contextlib.nullcontext()
+
+
 cfg = fsdp_config.train_config()
 
 _2D_Ready = False
@@ -349,53 +356,84 @@ else:
 
 _gpu_mem_tracker.start()
 
-while local_iter_num < cfg.iters_to_run:
-    t0 = time.perf_counter()
-    logits, loss = model(X, Y)
-    # immediately async prefetch next batch while model is doing the forward pass on the GPU
-    X, Y = get_batch("train")
-    # backward pass, with gradient scaling if training in fp16
-    loss.backward()
-    # clip the gradient
-    # if grad_clip != 0.0:
-    #    scaler.unscale_(optimizer)
-    #    torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-    # step the optimizer and scaler if training in fp16
-    optimizer.step()
+@contextlib.contextmanager
+def maybe_run_profiler(cfg, *args, **kwargs):
+    use_profiler: bool = cfg.run_profiler
 
-    # flush the gradients as soon as we can, no need for this memory anymore
-    optimizer.zero_grad(set_to_none=True)
-    torch.distributed.barrier()
+    if use_profiler:
+        with torch.profiler.profile(
+            activities=[
+                torch.profiler.ProfilerActivity.CPU,
+                torch.profiler.ProfilerActivity.CUDA,
+            ],
+            schedule=torch.profiler.schedule(wait=1, warmup=2, active=3, repeat=1),
+            on_trace_ready=torch.profiler.tensorboard_trace_handler(
+                cfg.profile_folder
+            ),
+            profile_memory=True,
+            with_stack=False,
+            record_shapes=True,
+        ) as torch_profiler:
+            yield torch_profiler
+    else:
+        torch_profiler = contextlib.nullcontext()
+        yield None
 
-    # timing and logging
-    t1 = time.perf_counter()
-    dt = t1 - t0
-    _gpu_mem_tracker.update()
+    if cfg.run_profiler:
+        print(f"Profiling active.  Traces will be saved at {cfg.profile_folder}")
 
-    if iter_num >= warmup:
-        lossf = loss.item()  # loss as float. note: this is a CPU-GPU sync point
-        # if local_iter_num >= 3:  # let the training loop settle a bit
+with maybe_run_profiler(cfg) as torch_profiler:
 
-        mfu = model.estimate_mfu(
-            _mfu_model_params,
-            cfg.batch_size,  # / _fsdp_size * world_size,  #  * gradient_accumulation_steps,
-            dt,
-            config_file=model_config,
-            tp_size=_tp_size,
-        )
-        running_mfu = mfu if running_mfu == -1.0 else 0.9 * running_mfu + 0.1 * mfu
-        rank_print(
-            f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%"
-        )
-        iter_time_accumulator += dt
-        iter_count += 1
-    iter_num += 1
-    local_iter_num += 1
-    rank_print(f"iter {iter_num} completed...")
+    while local_iter_num < cfg.iters_to_run:
+        t0 = time.perf_counter()
+        logits, loss = model(X, Y)
+        # immediately async prefetch next batch while model is doing the forward pass on the GPU
+        X, Y = get_batch("train")
+        # backward pass, with gradient scaling if training in fp16
+        loss.backward()
+        # clip the gradient
+        # if grad_clip != 0.0:
+        #    scaler.unscale_(optimizer)
+        #    torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+        # step the optimizer and scaler if training in fp16
+        optimizer.step()
+        if torch_profiler:
+            torch_profiler.step()
 
-    # termination conditions
-    if iter_num > max_iters:
-        break
+
+        # flush the gradients as soon as we can, no need for this memory anymore
+        optimizer.zero_grad(set_to_none=True)
+        torch.distributed.barrier()
+
+        # timing and logging
+        t1 = time.perf_counter()
+        dt = t1 - t0
+        _gpu_mem_tracker.update()
+
+        if iter_num >= warmup:
+            lossf = loss.item()  # loss as float. note: this is a CPU-GPU sync point
+            # if local_iter_num >= 3:  # let the training loop settle a bit
+
+            mfu = model.estimate_mfu(
+                _mfu_model_params,
+                cfg.batch_size,  # / _fsdp_size * world_size,  #  * gradient_accumulation_steps,
+                dt,
+                config_file=model_config,
+                tp_size=_tp_size,
+            )
+            running_mfu = mfu if running_mfu == -1.0 else 0.9 * running_mfu + 0.1 * mfu
+            rank_print(
+                f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%"
+            )
+            iter_time_accumulator += dt
+            iter_count += 1
+        iter_num += 1
+        local_iter_num += 1
+        rank_print(f"iter {iter_num} completed...")
+
+        # termination conditions
+        if iter_num > max_iters:
+            break
 
         # determine and set the learning rate for this iteration
         # lr = get_lr(iter_num) if decay_lr else learning_rate

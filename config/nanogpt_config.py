@@ -27,6 +27,10 @@ class train_config(base_config):
     dataset = "openwebtext"  # options = shakespeare_char, openwebtext
     data_dir = "data"
 
+    # profiling
+    run_profiler: bool = False
+    profile_folder: str = "profile_traces"
+
     # training
     iters_to_run: int = 8  # << --- Set to None to run epochs
     num_epochs: int = 2
@@ -93,7 +97,7 @@ def build_model(cfg, tp_mesh=None, rank=None):
         n_head: int = 20
         n_embd: int = 1600
         
-     elif model_name == "13B":
+    elif model_name == "13B":
         n_layer: int = 44
         n_head: int = 40
         n_embd: int = 5120
