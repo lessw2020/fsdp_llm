@@ -21,7 +21,7 @@ import torch.distributed as dist
 @dataclass
 class train_config(base_config):
     # current models = "10.5M", "124M", "201M", "1B", "1.5B"
-    model_name: str = "10.5M"
+    model_name: str = "201M"
     use_tensor_parallel: bool = False
 
     dataset = "openwebtext"  # options = shakespeare_char, openwebtext
@@ -46,6 +46,9 @@ class train_config(base_config):
     wrapping_policy = ModuleWrapPolicy({CausalSelfAttention, MLP})
     model_sharding_strategy = ShardingStrategy.FULL_SHARD
     use_fsdp_activation_checkpointing: bool = True
+
+    # optimizer overlap
+    use_optimizer_overlap: bool = True
 
     # stats - dynamic, not set by user
     current_model_params: int = 0
@@ -96,12 +99,12 @@ def build_model(cfg, tp_mesh=None, rank=None):
         n_layer: int = 46
         n_head: int = 20
         n_embd: int = 1600
-        
+
     elif model_name == "13B":
         n_layer: int = 44
         n_head: int = 40
         n_embd: int = 5120
-    
+
     elif model_name == "20B":
         n_layer: int = 44
         n_head: int = 64

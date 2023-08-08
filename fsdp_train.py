@@ -20,7 +20,7 @@ import torch
 import torch.distributed as dist
 import torch.nn as nn
 from torch.distributed import destroy_process_group, init_process_group
-from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, ShardingStrategy
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 import config.nanogpt_config as fsdp_config
@@ -29,6 +29,7 @@ from models.nanogpt.model import GPT, GPTConfig
 from contextlib import contextmanager
 
 import contextlib
+from torch.distributed.optim import _apply_optimizer_in_backward
 
 _none_context = contextlib.nullcontext()
 
@@ -251,20 +252,40 @@ else:
 # todo - add back main code later for resume training
 mixed_precision_policy = fsdp_config.set_mixed_precision_policy()
 
+# HSDP specific
+dmesh = None
+if cfg.model_sharding_strategy in [
+    ShardingStrategy.HYBRID_SHARD,
+    ShardingStrategy._HYBRID_SHARD_ZERO2,
+]:
+    print(f"to impl - no effect now")
+
 
 model = FSDP(
     model,
+    sharding_strategy=cfg.model_sharding_strategy,
     auto_wrap_policy=cfg.wrapping_policy,
     mixed_precision=mixed_precision_policy,
     device_id=device,
     process_group=fsdp_pg,
+    use_orig_params=True,
 )
 
 
 if cfg.use_fsdp_activation_checkpointing:
     fsdp_config.apply_checkpointing_policy(model)
-    if _rank == 0:
-        print(f"--> FSDP activation checkpointing in use")
+    rank_print(f"--> FSDP activation checkpointing in use")
+
+
+# ---- debug print gpu's in use by FSDP
+shard_g_size = model.process_group.size()
+shard_rank = model.process_group.rank()
+replicate_g = None  # model._inter_node_state.process_group
+
+dist.barrier()
+print(f"{shard_g_size=}, {shard_rank=}\n")
+dist.barrier()
+
 # optimizer
 # new PyTorch nightly has a new 'fused' option for AdamW that is much faster
 
@@ -274,6 +295,18 @@ use_fused = (device_type == "cuda") and (
 
 rank_print(f"Optimizer = using fused AdamW: {use_fused}")
 extra_args = dict(fused=True) if use_fused else dict()
+
+# optimizer overlap
+if cfg.use_optimizer_overlap:
+    _apply_optimizer_in_backward(
+        optimizer_class=torch.optim.AdamW,
+        params=model.parameters(),
+        optimizer_kwargs=extra_args,
+        register_hook=False,
+    )
+    rank_print(f"Optimizer Overlap in use. ")
+
+
 optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, **extra_args)
 # optimizer = torch.optim.AdamW(model.parameters(), learning_rate)
 
@@ -356,6 +389,7 @@ else:
 
 _gpu_mem_tracker.start()
 
+
 @contextlib.contextmanager
 def maybe_run_profiler(cfg, *args, **kwargs):
     use_profiler: bool = cfg.run_profiler
@@ -367,9 +401,7 @@ def maybe_run_profiler(cfg, *args, **kwargs):
                 torch.profiler.ProfilerActivity.CUDA,
             ],
             schedule=torch.profiler.schedule(wait=1, warmup=2, active=3, repeat=1),
-            on_trace_ready=torch.profiler.tensorboard_trace_handler(
-                cfg.profile_folder
-            ),
+            on_trace_ready=torch.profiler.tensorboard_trace_handler(cfg.profile_folder),
             profile_memory=True,
             with_stack=False,
             record_shapes=True,
@@ -382,8 +414,8 @@ def maybe_run_profiler(cfg, *args, **kwargs):
     if cfg.run_profiler:
         print(f"Profiling active.  Traces will be saved at {cfg.profile_folder}")
 
-with maybe_run_profiler(cfg) as torch_profiler:
 
+with maybe_run_profiler(cfg) as torch_profiler:
     while local_iter_num < cfg.iters_to_run:
         t0 = time.perf_counter()
         logits, loss = model(X, Y)
@@ -399,7 +431,6 @@ with maybe_run_profiler(cfg) as torch_profiler:
         optimizer.step()
         if torch_profiler:
             torch_profiler.step()
-
 
         # flush the gradients as soon as we can, no need for this memory anymore
         optimizer.zero_grad(set_to_none=True)
