@@ -16,12 +16,13 @@ from torch.distributed.fsdp import (
     ShardingStrategy,
 )
 import torch.distributed as dist
+from torch.distributed._tensor import DeviceMesh
 
 
 @dataclass
 class train_config(base_config):
-    # current models = "10.5M", "124M", "201M", "1B", "1.5B"
-    model_name: str = "201M"
+    # current models = "10.5M", "124M", "201M", "500M", "1B", "1.5B"
+    model_name: str = "500M"
     use_tensor_parallel: bool = False
 
     dataset = "openwebtext"  # options = shakespeare_char, openwebtext
@@ -44,7 +45,7 @@ class train_config(base_config):
     # FSDP specific
     use_mixed_precision: bool = True
     wrapping_policy = ModuleWrapPolicy({CausalSelfAttention, MLP})
-    model_sharding_strategy = ShardingStrategy.FULL_SHARD
+    model_sharding_strategy = ShardingStrategy._HYBRID_SHARD_ZERO2  # SHARD_GRAD_OP  #
     use_fsdp_activation_checkpointing: bool = True
 
     # optimizer overlap
@@ -88,6 +89,11 @@ def build_model(cfg, tp_mesh=None, rank=None):
     elif model_name == "201M":
         n_layer: int = 16
         n_head: int = 16
+        n_embd: int = 1024
+
+    elif model_name == "500M":
+        n_layer: int = 32
+        n_head: int = 32
         n_embd: int = 1024
 
     elif model_name == "1B":

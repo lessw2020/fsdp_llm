@@ -8,28 +8,27 @@ c - to run, bash run_tp.sh
 
 """
 
+import contextlib
 import inspect
 import math
 import os
 import pickle
 import time
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 
 import numpy as np
 import torch
 import torch.distributed as dist
 import torch.nn as nn
 from torch.distributed import destroy_process_group, init_process_group
-from torch.distributed.fsdp import FullyShardedDataParallel as FSDP, ShardingStrategy
+from torch.distributed._tensor import DeviceMesh
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+from torch.distributed.fsdp import ShardingStrategy
+from torch.distributed.optim import _apply_optimizer_in_backward
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 import config.nanogpt_config as fsdp_config
 from models.nanogpt.model import GPT, GPTConfig
-
-from contextlib import contextmanager
-
-import contextlib
-from torch.distributed.optim import _apply_optimizer_in_backward
 
 _none_context = contextlib.nullcontext()
 
@@ -40,7 +39,6 @@ _2D_Ready = False
 
 if cfg.use_tensor_parallel:
     try:
-        from torch.distributed._tensor import DeviceMesh
         from torch.distributed.tensor.parallel import (
             ColwiseParallel,
             PairwiseParallel,
@@ -48,7 +46,6 @@ if cfg.use_tensor_parallel:
             parallelize_module,
         )
         from torch.distributed.tensor.parallel._utils import _create_1d_device_mesh
-
         from torch.distributed.tensor.parallel.fsdp import enable_2d_with_fsdp
 
         # need to setup hooks for TP
@@ -254,11 +251,41 @@ mixed_precision_policy = fsdp_config.set_mixed_precision_policy()
 
 # HSDP specific
 dmesh = None
+using_hsdp = False
+
 if cfg.model_sharding_strategy in [
     ShardingStrategy.HYBRID_SHARD,
     ShardingStrategy._HYBRID_SHARD_ZERO2,
 ]:
-    print(f"to impl - no effect now")
+    _world_size = dist.get_world_size()
+    using_hsdp = True
+
+    # we will split the gpus of this node, into two mini-nodes
+    if _world_size == 16:
+        node_size = 8
+    elif _world_size == 8:
+        node_size = 4
+    else:
+        node_size = 2
+    rank_print(f"{node_size=}, with {_world_size=}")
+
+    assert (
+        _world_size // node_size == 2
+    ), f"world size of {_world_size=} is not evenly divisible by {node_size=} to yield two mini-nodes"
+
+    dmesh = torch.arange(0, _world_size).view(-1, node_size)
+    rank_print(f"{dmesh=}, {dmesh[0].tolist()=}, {dmesh[1].tolist()=}")
+    mesh = DeviceMesh(device_type="cuda", mesh=[dmesh[0].tolist(), dmesh[1].tolist()])
+    rank_print(f"{mesh=}")
+    mesh_groups = mesh.get_dim_groups()
+    # dim 0 is like (0, 4), (1, 5) groups, dim 1 is like (0, 1, 2, 3)
+    replicate_group, shard_group = mesh_groups[0], mesh_groups[1]
+    # rank_print(f"{shard_group=}, {replicate_group=}")
+
+    rank_print(
+        f"device mesh - shard group {dist.get_world_size(shard_group)}, replica group {dist.get_world_size(replicate_group)}"
+    )
+    fsdp_pg = (shard_group, replicate_group)
 
 
 model = FSDP(
@@ -280,10 +307,16 @@ if cfg.use_fsdp_activation_checkpointing:
 # ---- debug print gpu's in use by FSDP
 shard_g_size = model.process_group.size()
 shard_rank = model.process_group.rank()
-replicate_g = None  # model._inter_node_state.process_group
+replicate_g = None if not using_hsdp else model._inter_node_state.process_group
+shard_g = model.process_group
 
 dist.barrier()
-print(f"{shard_g_size=}, {shard_rank=}\n")
+if using_hsdp:
+    rank_print(f"Using HSDP:  {shard_g=}, {replicate_g=}")
+    assert shard_g == shard_group
+    assert replicate_g == replicate_group
+else:
+    print(f"{shard_g_size=}, {shard_rank=}, \n")
 dist.barrier()
 
 # optimizer
