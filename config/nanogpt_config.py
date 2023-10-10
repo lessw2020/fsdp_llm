@@ -28,7 +28,7 @@ class train_config(base_config):
     data_dir = "data"
 
     # version:
-    version = "9-21-2023...6_58 PM"
+    version = "1010-2023...1203 PM"
 
     # profiling
     run_profiler: bool = False
@@ -36,7 +36,7 @@ class train_config(base_config):
 
     # flash attention options
     use_flash22_bf16: bool = False
-    use_flash22_fp16: bool = True
+    use_flash22_fp16: bool = False
 
     # training
     iters_to_run: int = 8  # << --- Set to None to run epochs
