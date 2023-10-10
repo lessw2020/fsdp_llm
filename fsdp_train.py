@@ -383,6 +383,19 @@ else:
 
 # num_params = model.get_num_params()
 # print(f"{num_params=}")
+gpu_type = torch.cuda.get_device_name(0)
+if "A100" in gpu_type:
+    gpu_peak_flops = 312e12
+    rank_print(f"using A100 peak flops for MFU calcs...")
+elif "A10" in gpu_type:
+    gpu_peak_flops = 125e12
+    rank_print(f"using A10 peak flops for MFU calcs")
+else:
+    rank_print(
+        f"unable to determine gpu peak flops based on gpu description...using A100 numbers for MFU"
+    )
+    gpu_peak_flops = 312e12
+
 
 _gpu_mem_tracker.start()
 
@@ -448,6 +461,7 @@ with maybe_run_profiler(cfg) as torch_profiler:
                 dt,
                 config_file=model_config,
                 tp_size=_tp_size,
+                gpu_peak_flops=gpu_peak_flops,
             )
             running_mfu = mfu if running_mfu == -1.0 else 0.9 * running_mfu + 0.1 * mfu
             rank_print(

@@ -36,7 +36,7 @@ class train_config(base_config):
 
     # flash attention options
     use_flash22_bf16: bool = False
-    use_flash22_fp16: bool = False
+    use_flash22_fp16: bool = True
 
     # training
     iters_to_run: int = 8  # << --- Set to None to run epochs

@@ -483,7 +483,15 @@ class GPT(nn.Module):
 
         return optimizer
 
-    def estimate_mfu(self, num_params, fwdbwd_per_iter, dt, config_file, tp_size=1):
+    def estimate_mfu(
+        self,
+        num_params,
+        fwdbwd_per_iter,
+        dt,
+        config_file,
+        tp_size=1,
+        gpu_peak_flops=None,
+    ):
         """estimate model flops utilization (MFU) in units of A100 bfloat16 peak FLOPS"""
         # first estimate the number of flops we do per iteration.
         # see PaLM paper Appendix B as ref: https://arxiv.org/abs/2204.02311
@@ -504,7 +512,9 @@ class GPT(nn.Module):
         # express our flops throughput as ratio of A100 bfloat16 peak flops or A10 bf16 flops
         flops_achieved = flops_per_iter * (1.0 / dt)  # per second
 
-        flops_promised = 125e12  # A10 TFlops ....  312e12  A100 GPU bfloat16 peak flops is 312 TFLOPS
+        flops_promised = (
+            gpu_peak_flops if gpu_peak_flops is not None else 312e12
+        )  # 125e12  # A10 TFlops ....  312e12  A100 GPU bfloat16 peak flops is 312 TFLOPS
         mfu = (flops_achieved / flops_promised) / tp_size
 
         return mfu
