@@ -386,13 +386,13 @@ else:
 gpu_type = torch.cuda.get_device_name(0)
 if "A100" in gpu_type:
     gpu_peak_flops = 312e12
-    rank_print(f"using A100 peak flops for MFU calcs...")
+    rank_print(f"using A100 peak flops for MFU calcs...\n")
 elif "A10" in gpu_type:
     gpu_peak_flops = 125e12
-    rank_print(f"using A10 peak flops for MFU calcs")
+    rank_print(f"using A10 peak flops for MFU calcs...\n")
 else:
     rank_print(
-        f"unable to determine gpu peak flops based on gpu description...using A100 numbers for MFU"
+        f"unable to determine gpu peak flops based on gpu description...using A100 numbers for MFU calcs...\n"
     )
     gpu_peak_flops = 312e12
 
