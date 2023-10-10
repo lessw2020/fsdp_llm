@@ -16,27 +16,33 @@ from torch.distributed.fsdp import (
     ShardingStrategy,
 )
 import torch.distributed as dist
-from torch.distributed._tensor import DeviceMesh
 
 
 @dataclass
 class train_config(base_config):
-    # current models = "10.5M", "124M", "201M", "500M", "1B", "1.5B"
-    model_name: str = "500M"
+    # current models = "10.5M", "124M", "201M", "1B", "1.5B"
+    model_name: str = "124M"
     use_tensor_parallel: bool = False
 
     dataset = "openwebtext"  # options = shakespeare_char, openwebtext
     data_dir = "data"
 
+    # version:
+    version = "9-21-2023...6_58 PM"
+
     # profiling
     run_profiler: bool = False
     profile_folder: str = "profile_traces"
+
+    # flash attention options
+    use_flash22_bf16: bool = False
+    use_flash22_fp16: bool = True
 
     # training
     iters_to_run: int = 8  # << --- Set to None to run epochs
     num_epochs: int = 2
 
-    batch_size = 48
+    batch_size = 12
     block_size = 1024  # 256  # 1024 = gpt2, openwebtext, context of up to 256 previous characters
     use_bias: bool = False  # use bias in linear layers (recommend No)
     vocab_size: int = 50304  # use 65 for shakespeare, GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
@@ -45,7 +51,7 @@ class train_config(base_config):
     # FSDP specific
     use_mixed_precision: bool = True
     wrapping_policy = ModuleWrapPolicy({CausalSelfAttention, MLP})
-    model_sharding_strategy = ShardingStrategy._HYBRID_SHARD_ZERO2  # SHARD_GRAD_OP  #
+    model_sharding_strategy = ShardingStrategy.FULL_SHARD
     use_fsdp_activation_checkpointing: bool = True
 
     # optimizer overlap
@@ -91,11 +97,6 @@ def build_model(cfg, tp_mesh=None, rank=None):
         n_head: int = 16
         n_embd: int = 1024
 
-    elif model_name == "500M":
-        n_layer: int = 32
-        n_head: int = 32
-        n_embd: int = 1024
-
     elif model_name == "1B":
         n_layer: int = 48
         n_head: int = 20
@@ -112,8 +113,8 @@ def build_model(cfg, tp_mesh=None, rank=None):
         n_embd: int = 5120
 
     elif model_name == "20B":
-        n_layer: int = 44
-        n_head: int = 64
+        n_layer: int = 60
+        n_head: int = 48
         n_embd: int = 6144
 
     else:
@@ -127,7 +128,13 @@ def build_model(cfg, tp_mesh=None, rank=None):
         bias=cfg.use_bias,
         vocab_size=cfg.vocab_size,
         dropout=cfg.dropout,
+        use_flash22_fp16=cfg.use_flash22_fp16,  # pass Triton option in
+        use_flash22_bf16=cfg.use_flash22_bf16,
     )
+
+    assert not (
+        cfg.use_flash22_fp16 and cfg.use_flash22_bf16
+    ), f"both fp16 and bf16 set to True...please use only one at a time."
 
     gpt_conf = GPTConfig(**model_args)
     model = GPT(tp_mesh, gpt_conf, rank=rank)
