@@ -80,6 +80,58 @@ class CausalSelfAttention(nn.Module):
             config.n_embd % config.n_head == 0
         ), f"{config.n_embd=}, is not evenly divisble by {config.n_head=}"
 
+        self.dropout = config.dropout
+
+        # Flash Attention config
+        self.use_flash22_bf16 = config.use_flash22_bf16
+        self.use_flash22_fp16 = config.use_flash22_fp16
+        self.use_flash_pytorch_sdpa = config.use_flash_pytorch_sdpa
+        gpu_sm = torch.cuda.get_device_capability()
+        self.flash_gpu_supported = gpu_sm[0] >= 8
+
+        # confirm gpu can support flash attention (SM = 8.0+, or Ampere architecture)
+
+        flash_options = (
+            self.use_flash22_bf16,
+            self.use_flash22_fp16,
+            self.use_flash_pytorch_sdpa,
+        )
+
+        # flash attention make GPU go brrrrr but support is only in PyTorch nightly and still a bit scary
+        self.flash_pt_support = (
+            hasattr(torch.nn.functional, "scaled_dot_product_attention")
+            and self.dropout == 0.0
+        )
+        if not self.flash_pt_support:
+            print(
+                "WARNING: using slow attention. Flash Attention atm needs PyTorch nightly and dropout=0.0"
+            )
+
+        if not self.flash_gpu_supported and any(flash_options):
+            import os
+
+            rank = int(os.environ["RANK"])
+            if rank == 0:
+                print(
+                    f"WARNING:  Your GPU does not support Flash Attention (requires 8.0 or higher).\nReverting to Manual Attention! GPU SM = {gpu_sm}"
+                )
+            # reset to not use flash
+            for item in flash_options:
+                item = False
+
+        # causal mask to ensure that attention is only applied to the left in the input sequence
+        if (
+            not self.flash_pt_support
+            or not self.flash_gpu_supported
+            or not any(flash_options)
+        ):
+            self.register_buffer(
+                "bias",
+                torch.tril(torch.ones(config.block_size, config.block_size)).view(
+                    1, 1, config.block_size, config.block_size
+                ),
+            )
+
         self.mesh = mesh
         self.n_embd = config.n_embd
 
@@ -103,28 +155,7 @@ class CausalSelfAttention(nn.Module):
         # pre-calc num heads if using tp (if fsdp only, tp_size = 1 so inert)
         self.tp_num_heads = self.n_head // self.tp_size
 
-        self.dropout = config.dropout
-        self.use_flash22_bf16 = config.use_flash22_bf16
-        self.use_flash22_fp16 = config.use_flash22_fp16
-        self.use_flash_pytorch_sdpa = config.use_flash_pytorch_sdpa
         self.scale = None
-
-        # flash attention make GPU go brrrrr but support is only in PyTorch nightly and still a bit scary
-        self.flash = (
-            hasattr(torch.nn.functional, "scaled_dot_product_attention")
-            and self.dropout == 0.0
-        )
-        if not self.flash:
-            print(
-                "WARNING: using slow attention. Flash Attention atm needs PyTorch nightly and dropout=0.0"
-            )
-            # causal mask to ensure that attention is only applied to the left in the input sequence
-            self.register_buffer(
-                "bias",
-                torch.tril(torch.ones(config.block_size, config.block_size)).view(
-                    1, 1, config.block_size, config.block_size
-                ),
-            )
 
     def forward(self, x):
         (
@@ -174,7 +205,11 @@ class CausalSelfAttention(nn.Module):
             y = flash22_bf16_attention(q, k, v, True, self.scale)
         elif self.use_flash22_fp16:
             y = flash22_fp16_attention(q, k, v, True, self.scale)
-        elif self.use_flash_pytorch_sdpa and self.flash:
+        elif (
+            self.use_flash_pytorch_sdpa
+            and self.flash_gpu_supported
+            and self.flash_pt_support
+        ):
             # flash attention using Flash Attention CUDA kernels
             y = torch.nn.functional.scaled_dot_product_attention(
                 q, k, v, attn_mask=None, dropout_p=self.dropout, is_causal=True
