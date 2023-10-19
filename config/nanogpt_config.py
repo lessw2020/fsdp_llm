@@ -28,7 +28,7 @@ class train_config(base_config):
     data_dir = "data"
 
     # version:
-    version = "1010-2023...1203 PM"
+    version = "10-19-2023...1203 PM"
 
     # profiling
     run_profiler: bool = False
