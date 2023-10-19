@@ -21,7 +21,7 @@ import torch.distributed as dist
 @dataclass
 class train_config(base_config):
     # current models = "10.5M", "124M", "201M", "1B", "1.5B"
-    model_name: str = "124M"
+    model_name: str = "10.5M"
     use_tensor_parallel: bool = False
 
     dataset = "openwebtext"  # options = shakespeare_char, openwebtext
@@ -35,8 +35,13 @@ class train_config(base_config):
     profile_folder: str = "profile_traces"
 
     # flash attention options
+    # setting all options to False = base PyTorch Multi-Head Attention
+    # Triton versions
     use_flash22_bf16: bool = False
-    use_flash22_fp16: bool = True
+    use_flash22_fp16: bool = False
+
+    # PyTorch Flash impl is in Scaled Dot Product Attention (SDPA)
+    use_flash_pytorch_sdpa: bool = True
 
     # training
     iters_to_run: int = 8  # << --- Set to None to run epochs

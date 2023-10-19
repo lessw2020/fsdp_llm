@@ -42,6 +42,7 @@ class GPTConfig:
     bias: bool = False  # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
     use_flash22_bf16: bool = False  # use Triton flash or not
     use_flash22_fp16: bool = False
+    use_flash_pytorch_sdpa: bool = True
 
 
 # @torch.jit.script # good to enable when not using torch.compile, disable when using (our default)
@@ -105,6 +106,7 @@ class CausalSelfAttention(nn.Module):
         self.dropout = config.dropout
         self.use_flash22_bf16 = config.use_flash22_bf16
         self.use_flash22_fp16 = config.use_flash22_fp16
+        self.use_flash_pytorch_sdpa = config.use_flash_pytorch_sdpa
         self.scale = None
 
         # flash attention make GPU go brrrrr but support is only in PyTorch nightly and still a bit scary
@@ -172,8 +174,8 @@ class CausalSelfAttention(nn.Module):
             y = flash22_bf16_attention(q, k, v, True, self.scale)
         elif self.use_flash22_fp16:
             y = flash22_fp16_attention(q, k, v, True, self.scale)
-        elif self.flash:
-            # efficient attention using Flash Attention CUDA kernels
+        elif self.use_flash_pytorch_sdpa and self.flash:
+            # flash attention using Flash Attention CUDA kernels
             y = torch.nn.functional.scaled_dot_product_attention(
                 q, k, v, attn_mask=None, dropout_p=self.dropout, is_causal=True
             )
