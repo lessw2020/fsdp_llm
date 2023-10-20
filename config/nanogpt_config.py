@@ -21,7 +21,7 @@ import torch.distributed as dist
 @dataclass
 class train_config(base_config):
     # current models = "10.5M", "124M", "201M", "1B", "1.5B"
-    model_name: str = "10.5M"
+    model_name: str = "124M"
     use_tensor_parallel: bool = False
 
     dataset = "openwebtext"  # options = shakespeare_char, openwebtext
@@ -44,10 +44,12 @@ class train_config(base_config):
     use_flash_pytorch_sdpa: bool = True
 
     # training
+    # use PT2 training compiler to speed up training (faster when it works but not all models compile..)
+    pt2_compile: bool = True
     iters_to_run: int = 8  # << --- Set to None to run epochs
     num_epochs: int = 2
 
-    batch_size = 12
+    batch_size = 16
     block_size = 1024  # 256  # 1024 = gpt2, openwebtext, context of up to 256 previous characters
     use_bias: bool = False  # use bias in linear layers (recommend No)
     vocab_size: int = 50304  # use 65 for shakespeare, GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
@@ -57,7 +59,7 @@ class train_config(base_config):
     use_mixed_precision: bool = True
     wrapping_policy = ModuleWrapPolicy({CausalSelfAttention, MLP})
     model_sharding_strategy = ShardingStrategy.FULL_SHARD
-    use_fsdp_activation_checkpointing: bool = True
+    use_fsdp_activation_checkpointing: bool = False
 
     # optimizer overlap
     use_optimizer_overlap: bool = True
@@ -93,8 +95,8 @@ def build_model(cfg, tp_mesh=None, rank=None):
     elif model_name == "124M":
         # block_size: int = 1024
         # vocab_size: int = 50304  # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
-        n_layer: int = 12
-        n_head: int = 12
+        n_layer: int = 24
+        n_head: int = 24
         n_embd: int = 768
 
     elif model_name == "201M":

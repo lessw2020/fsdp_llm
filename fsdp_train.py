@@ -35,6 +35,7 @@ _none_context = contextlib.nullcontext()
 
 
 cfg = fsdp_config.train_config()
+import time
 
 _2D_Ready = False
 
@@ -106,7 +107,7 @@ device = (
     "cuda"  # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
 )
 
-compile = False  # use PyTorch 2.0 to compile the model to be faster
+# compile = False  # use PyTorch 2.0 to compile the model to be faster
 # -----------------------------------------------------------------------------
 """config_keys = [
     k
@@ -314,11 +315,17 @@ optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, **extra_args
 #    optimizer.load_state_dict(checkpoint["optimizer"])
 
 # compile the model
-"""if compile:
-    print("compiling the model... (takes a ~minute)")
+
+if cfg.pt2_compile:
+    rank_print("compiling the model with PT2 compiler... (takes a ~minute)")
+    start = time.perf_counter()
     unoptimized_model = model
     model = torch.compile(model)  # requires PyTorch 2.0
+    stop = time.perf_counter()
+    compile_time = round(stop - start, 5)
+    rank_print(f"compilation complete.  Time on compile: {compile_time}")
 
+"""
 # wrap model into DDP container
 if ddp:
     model = DDP(model, device_ids=[ddp_local_rank])
